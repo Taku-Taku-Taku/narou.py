@@ -62,8 +62,27 @@ uv run main.py --clear-cache
 - `output/作品タイトル(ncode)_開始話-終了話.epub` という名前で保存されます。
 - 挿絵を含めて180MBを超える場合は、章の区切りで複数のファイルに分割されます。
 
-生成されたファイルは、[Send to Kindle](https://www.amazon.co.jp/sendtokindle/) などで Kindle に送信してください。
-（送信できる容量が大きいので Web 版をお勧めします）
+### Kindle への転送
+
+> [!IMPORTANT]
+> Kindle 端末は EPUB を直接読めません。EPUB を USB でそのままコピーしても、ライブラリに表示されません。
+
+**Send to Kindle（おすすめ）**
+
+[Send to Kindle](https://www.amazon.co.jp/sendtokindle/) で送ると、Amazon 側で Kindle 用の形式に変換されて端末に届きます。
+送信できる容量が大きい（200MB）ので Web 版がおすすめです。
+
+**USB 接続で転送する場合**
+
+1. [Calibre](https://calibre-ebook.com/) で EPUB を **AZW3** 形式に変換する
+2. Kindle をパソコンに接続し、`documents` フォルダにコピーする
+
+| | Send to Kindle | USB（AZW3 に変換） |
+|---|---|---|
+| 変換の手間 | 不要 | Calibre での変換が必要 |
+| 容量の上限 | 200MB（Web 版） | なし |
+| ネット接続 | 必要 | 不要 |
+| 読書位置の同期・他端末での閲覧 | できる | できない（その端末のみ） |
 
 ### オプション一覧
 
