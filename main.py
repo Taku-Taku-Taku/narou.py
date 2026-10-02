@@ -14,12 +14,25 @@ from cache import CacheManager
 
 IMG_PATTERN = re.compile(r'<img[^>]+src="([^"]+)"')
 
+# ncode単体、または作品・各話のURL (https://ncode.syosetu.com/n1234ab/ など)
+NCODE_PATTERN = re.compile(r"(?:^|/)(n\d{4}[a-z]+)(?:/|$)", re.IGNORECASE)
+
+
+def extract_ncode(text: str) -> str | None:
+    """ncodeまたは作品URLからncodeを取り出す（小文字に正規化）"""
+    m = NCODE_PATTERN.search(text.strip())
+    return m.group(1).lower() if m else None
+
 
 def parse_args():
     p = argparse.ArgumentParser(
         description="小説家になろうの作品をKindle向け縦書きEPUBに変換"
     )
-    p.add_argument("ncode", nargs="?", help="作品のNコード (例: n1234ab)")
+    p.add_argument(
+        "ncode",
+        nargs="?",
+        help="作品のNコードまたはURL (例: n1234ab, https://ncode.syosetu.com/n1234ab/)",
+    )
     p.add_argument("--start", type=int, default=None, help="開始話数")
     p.add_argument("--end", type=int, default=None, help="終了話数")
     p.add_argument("--no-cache", action="store_true", help="キャッシュを使用しない")
@@ -41,23 +54,29 @@ def parse_args():
 def main():
     args = parse_args()
 
+    ncode = None
+    if args.ncode:
+        ncode = extract_ncode(args.ncode)
+        if ncode is None:
+            print(
+                f"エラー: ncodeまたは作品URLとして認識できません: {args.ncode}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+
     # キャッシュクリア
     if args.clear_cache:
         cache = CacheManager()
-        ncode = args.ncode.lower() if args.ncode else None
         cache.clear(ncode)
         if ncode:
             print(f"キャッシュを削除しました: {ncode}")
         else:
             print("全キャッシュを削除しました")
-        if not args.ncode:
             return
 
-    if not args.ncode:
+    if not ncode:
         print("エラー: ncodeを指定してください", file=sys.stderr)
         sys.exit(1)
-
-    ncode = args.ncode.lower()
 
     cache = CacheManager(enabled=not args.no_cache)
     scraper = NarouScraper(cache=cache)

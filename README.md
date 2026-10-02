@@ -24,38 +24,46 @@ uv sync
 
 ## 使い方
 
+コマンドはすべて、展開したフォルダの中で実行してください。
+
 ```bash
 # 作品全話を変換
-uv run python main.py <ncode>
+uv run main.py <ncode>
 
-# 話数を指定して変換　(例：1~10話まで) 
-uv run python main.py <ncode> --start 1 --end 10
+# 話数を指定して変換 (例：1〜10話)
+uv run main.py <ncode> --start 1 --end 10
 
-# 画像サイズを指定 (small: 6型, medium: 7型, large: 10型　指定がなければ、元の画像のまま)
-uv run python main.py <ncode> --image-size medium
+# 画像サイズを指定 (指定しなければ元の解像度のまま)
+uv run main.py <ncode> --image-size medium
 
-# 出力先を指定(デフォルト:"/output")
-uv run python main.py <ncode> -o ./my_output
+# 出力先を指定 (デフォルト: 実行したフォルダの output/)
+uv run main.py <ncode> -o ./my_output
 
-# キャッシュを無効にして取得
-uv run python main.py <ncode> --no-cache
+# キャッシュを使わずに取得 (改稿された話を取り直したいとき)
+uv run main.py <ncode> --no-cache
 
-# 特定作品のキャッシュを削除
-uv run python main.py <ncode> --clear-cache
+# 特定作品のキャッシュを削除してから、取り直して変換
+uv run main.py <ncode> --clear-cache
 
-# 全キャッシュを削除
-uv run python main.py --clear-cache
+# 全キャッシュを削除 (変換はしない)
+uv run main.py --clear-cache
 ```
 
 <details>
 <summary>ncodeとは？</summary>
 
-各小説のURL https://ncode.syosetu.com/n0498fr/ （例：病毒の王 水木あおい）の **n0498fr** の部分です
+各小説のURL https://ncode.syosetu.com/n0498fr/ （例：病毒の王 水木あおい）の **n0498fr** の部分です。
+大文字・小文字はどちらでも構いません。作品ページのURL（例：`https://ncode.syosetu.com/n0498fr/`）をそのまま指定することもできます。
 
 </details>
 
-生成されたファイルを、send to kindle (https://www.amazon.co.jp/sendtokindle/) などを用いて送信する必要があります。
-（送信可能な容量が大きいのでweb版をお勧めします）
+### 出力されるファイル
+
+- `output/作品タイトル(ncode)_開始話-終了話.epub` という名前で保存されます。
+- 挿絵を含めて180MBを超える場合は、章の区切りで複数のファイルに分割されます。
+
+生成されたファイルは、[Send to Kindle](https://www.amazon.co.jp/sendtokindle/) などで Kindle に送信してください。
+（送信できる容量が大きいので Web 版をお勧めします）
 
 ### オプション一覧
 
@@ -63,14 +71,22 @@ uv run python main.py --clear-cache
 |---|---|
 | `--start N` | 開始話数 |
 | `--end N` | 終了話数 |
-| `--image-size` | 画像の最大解像度 (`small`(6型) / `medium`(7型) / `large`(10型))。未指定時はリサイズなし |
-| `-o`, `--output` | 出力ディレクトリ (デフォルト: `output`(無ければ自動生成)) |
-| `--no-cache` | キャッシュを使用しない |
-| `--clear-cache` | キャッシュを削除 |
+| `--image-size` | 挿絵の最大解像度。`small` (6型: 1072×1448) / `medium` (7型: 1236×1648) / `large` (10型: 1860×2480)。未指定時はリサイズなし |
+| `-o`, `--output` | 出力フォルダ (デフォルト: `output`。無ければ自動で作成) |
+| `--no-cache` | キャッシュを読み書きせず、すべてサイトから取得する |
+| `--clear-cache` | キャッシュを削除する。ncode を指定するとその作品のキャッシュだけを削除し、続けて変換も行う |
+
+### キャッシュについて
+
+- 一度取得した本文・目次・挿絵は、ツールのフォルダ内の `cache/` に保存され、次回からはサイトにアクセスせずに使われます。
+- 連載中の作品で新しい話が追加された場合は、自動で目次を取り直します。
+- すでに取得済みの話が**改稿された場合は自動では反映されません**。`--no-cache` か `--clear-cache` を使ってください。
+- サイトへの負荷を抑えるため、1話ごとに約1秒、10話ごとに5秒の待ち時間を入れています。話数の多い作品は時間がかかります。
 
 
 ## 更新履歴
 - 2026/2/15　リリース
+- 2026/10/3　v1.1.0：変換時の文字化け・画像まわりの不具合を修正、連載中作品の新話を自動取得
 
 もし、不具合・改善点等ありましたら、issueやpull requestなどを送っていただければ幸いです。
 

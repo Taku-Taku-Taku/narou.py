@@ -101,7 +101,11 @@ class NarouScraper:
         if len(data) < 2:
             return None
 
-        return data[1]
+        # 存在しないncodeだとAPIは条件を無視して無関係な作品を返すため照合する
+        metadata = data[1]
+        if metadata.get("ncode", "").lower() != ncode.lower():
+            return None
+        return metadata
 
     def fetch_toc(self, ncode: str, total_episodes: int | None = None) -> dict:
         """目次ページから章構造とエピソード一覧を取得（複数ページ対応）
