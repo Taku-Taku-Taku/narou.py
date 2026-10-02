@@ -1,6 +1,8 @@
 """なろうスクレイピング処理"""
 
+import hashlib
 import time
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -17,7 +19,7 @@ API_REQUEST_INTERVAL = 3.0  # なろうAPIリクエスト間のウェイト（�
 class NarouScraper:
     def __init__(self, cache=None):
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "narou2epub/1.0"})
+        self.session.headers.update({"User-Agent": "narou.py/1.1.0"})
         self.cache = cache
         self._last_download_time = 0.0
         self._download_counter = 0
@@ -81,11 +83,10 @@ class NarouScraper:
         self._last_api_time = time.monotonic()
 
     def fetch_metadata(self, ncode: str) -> dict | None:
-        """なろうAPIでメタデータを取得"""
-        cached = self.cache.get("metadata", ncode) if self.cache else None
-        if cached:
-            return cached
+        """なろうAPIでメタデータを取得
 
+        総話数などの更新を検知するため、キャッシュは使わず毎回APIに問い合わせる
+        """
         params = {
             "out": "json",
             "ncode": ncode,
@@ -100,15 +101,18 @@ class NarouScraper:
         if len(data) < 2:
             return None
 
-        metadata = data[1]
-        if self.cache:
-            self.cache.set("metadata", ncode, metadata)
-        return metadata
+        return data[1]
 
-    def fetch_toc(self, ncode: str) -> dict:
-        """目次ページから章構造とエピソード一覧を取得（複数ページ対応）"""
+    def fetch_toc(self, ncode: str, total_episodes: int | None = None) -> dict:
+        """目次ページから章構造とエピソード一覧を取得（複数ページ対応）
+
+        total_episodes を指定すると、キャッシュの話数と一致する場合のみキャッシュを使う
+        （新話の追加・削除があれば目次を取り直す）
+        """
         cached = self.cache.get("toc", ncode) if self.cache else None
-        if cached:
+        if cached and (
+            total_episodes is None or len(cached["episodes"]) == total_episodes
+        ):
             return cached
 
         chapters = []
@@ -248,9 +252,16 @@ class NarouScraper:
             self.cache.set("episode", f"{ncode}_{number}", html)
         return html
 
-    def fetch_image(self, url: str) -> bytes:
-        """画像をダウンロード"""
+    def fetch_image(self, ncode: str, url: str) -> bytes:
+        """画像をダウンロード（キャッシュはncode単位で削除できるようncodeを接頭辞にする）"""
+        key = f"{ncode}_{hashlib.sha1(url.encode('utf-8')).hexdigest()}"
+        cached = self.cache.get_bytes("image", key) if self.cache else None
+        if cached:
+            return cached
+
         self._wait_for_download()
         resp = self.session.get(url)
         resp.raise_for_status()
+        if self.cache:
+            self.cache.set_bytes("image", key, resp.content)
         return resp.content

@@ -47,6 +47,9 @@ _ALPHA_TO_ZENKAKU = str.maketrans(
 # HTMLタグを避けてテキスト部分だけを処理するためのパターン
 _TEXT_OUTSIDE_TAGS = re.compile(r"([^<>]+)(?=<|$)")
 
+# HTMLエンティティ（&amp; &#12345; &#x3042; など）。変換対象から除外する
+_ENTITY = re.compile(r"(&(?:#[0-9]+|#[xX][0-9a-fA-F]+|[a-zA-Z][a-zA-Z0-9]*);)")
+
 # テキスト中の半角数字の連続
 _HANKAKU_NUM = re.compile(r"\d+")
 
@@ -92,14 +95,25 @@ def _convert_alpha(match: re.Match) -> str:
     return text.translate(_ALPHA_TO_ZENKAKU)
 
 
-def _convert_text_segment(match: re.Match) -> str:
-    """HTMLタグの外側のテキスト部分のみ英字・数字を変換"""
-    text = match.group(0)
+def _convert_plain_text(text: str) -> str:
+    """エンティティを含まないテキストの英字・数字を変換"""
     # 英字を先に変換（全角化済みの文字は数字パターンに干渉しない）
     text = _ENGLISH_CHARS.sub(_convert_alpha, text)
     # 残った半角数字を変換（英文中の数字は英字変換でスキップ済み）
     text = _HANKAKU_NUM.sub(_convert_num, text)
     return text
+
+
+def _convert_text_segment(match: re.Match) -> str:
+    """HTMLタグの外側のテキスト部分のみ英字・数字を変換
+
+    HTMLエンティティは壊さないようにそのまま残す
+    """
+    # splitの結果は奇数番目がエンティティ
+    parts = _ENTITY.split(match.group(0))
+    return "".join(
+        part if i % 2 else _convert_plain_text(part) for i, part in enumerate(parts)
+    )
 
 
 class RubyParser:

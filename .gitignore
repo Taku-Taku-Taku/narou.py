@@ -3,6 +3,7 @@ __pycache__/
 cache/metadata/
 cache/toc/
 cache/episode/
+cache/image/
 output/*.epub
 .venv/
 .claude

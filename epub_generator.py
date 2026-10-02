@@ -1,6 +1,8 @@
 """EPUB3生成"""
 
+import html
 import io
+import itertools
 import os
 import re
 
@@ -90,10 +92,20 @@ nav.toc a {
 """
 
 # Send to Kindle上限200MBに対し余裕を持たせた分割閾値
-# テキストの生サイズ(UTF-8)で判定、圧縮後は約1/3になる
+# 本文(UTF-8)と挿絵(ダウンロード時点)の生サイズの合計で判定する
 MAX_RAW_SIZE_BYTES = 180 * 1024 * 1024  # 180MB
 
 IMAGE_QUALITY = 85
+
+# 拡張子 → EPUBのコアメディアタイプ
+MEDIA_TYPES = {"jpg": "image/jpeg"}
+
+
+def _episode_size(ep: dict) -> int:
+    """エピソードの本文と挿絵の合計バイト数"""
+    body_size = len(ep.get("body", "").encode("utf-8"))
+    image_size = sum(len(img["data"]) for img in ep.get("images", []))
+    return body_size + image_size
 
 
 class EpubGenerator:
@@ -115,7 +127,8 @@ class EpubGenerator:
             img.thumbnail(
                 (self.image_max_width, self.image_max_height), Image.LANCZOS
             )
-        if img.mode in ("RGBA", "P"):
+        # JPEGで保存できるのはRGB/Lのみ（RGBA, P, LA, CMYK, I;16 などはRGBに変換）
+        if img.mode not in ("RGB", "L"):
             img = img.convert("RGB")
         buf = io.BytesIO()
         img.save(buf, format="JPEG", quality=IMAGE_QUALITY)
@@ -129,7 +142,7 @@ class EpubGenerator:
         デフォルト: 全話1ファイル
         サイズ超過時: 章の切れ目で分割（章なしの場合は均等分割）
         """
-        total_size = sum(len(ep.get("body", "").encode("utf-8")) for ep in episodes)
+        total_size = sum(_episode_size(ep) for ep in episodes)
 
         if total_size <= MAX_RAW_SIZE_BYTES:
             # 1ファイルに収まる
@@ -147,13 +160,11 @@ class EpubGenerator:
             current_vol_eps = []
             current_size = 0
 
-            for chapter in chapters:
-                chapter_eps = [e for e in episodes if e["chapter"] == chapter]
-                if not chapter_eps:
-                    continue
-                chapter_size = sum(
-                    len(e.get("body", "").encode("utf-8")) for e in chapter_eps
-                )
+            # 掲載順に連続する同じ章のエピソードをまとめる
+            # （章前のプロローグや同名の章があっても順序を保つ）
+            for _, group in itertools.groupby(episodes, key=lambda e: e["chapter"]):
+                chapter_eps = list(group)
+                chapter_size = sum(_episode_size(e) for e in chapter_eps)
 
                 # 現在の巻に追加するとサイズ超過、かつ既にエピソードがある場合は確定
                 if current_vol_eps and current_size + chapter_size > MAX_RAW_SIZE_BYTES:
@@ -176,17 +187,6 @@ class EpubGenerator:
                         "number": len(volumes) + 1,
                         "title": "",
                         "episodes": current_vol_eps,
-                    }
-                )
-
-            # 章に属さないエピソード
-            no_chapter = [e for e in episodes if e["chapter"] is None]
-            if no_chapter:
-                volumes.append(
-                    {
-                        "number": len(volumes) + 1,
-                        "title": "",
-                        "episodes": no_chapter,
                     }
                 )
         else:
@@ -263,13 +263,13 @@ class EpubGenerator:
                 img_item = epub.EpubItem(
                     uid=f"img_{img_count}",
                     file_name=img_file,
-                    media_type=f"image/{ext}",
+                    media_type=MEDIA_TYPES[ext],
                     content=optimized,
                 )
                 book.add_item(img_item)
                 body = body.replace(img_data["src"], img_file)
 
-            heading = ep["title"] or f"第{ep['number']}話"
+            heading = html.escape(ep["title"] or f"第{ep['number']}話")
             total_ep = metadata.get("general_all_no", "")
             ep_info = f"#{ep['number']} / {total_ep}" if total_ep else f"#{ep['number']}"
             chapter.content = (
@@ -284,7 +284,7 @@ class EpubGenerator:
         toc_link_items = []
         for ep in volume["episodes"]:
             num = ep["number"]
-            ep_title = ep["title"] or f"第{num}話"
+            ep_title = html.escape(ep["title"] or f"第{num}話")
             toc_link_items.append(
                 f'<li><a href="ep_{num:05d}.xhtml">#{num}　{ep_title}</a></li>'
             )
@@ -295,12 +295,12 @@ class EpubGenerator:
             lang="ja",
         )
         title_page.add_item(style)
-        subtitle_html = f"<h2>{vol_subtitle}</h2>" if vol_subtitle else ""
+        subtitle_html = f"<h2>{html.escape(vol_subtitle)}</h2>" if vol_subtitle else ""
         title_page.content = (
             f'<div class="titlepage">'
-            f"<h1>{title}</h1>"
+            f"<h1>{html.escape(title)}</h1>"
             f"{subtitle_html}"
-            f'<p class="author">{metadata.get("writer", "不明")}</p>'
+            f'<p class="author">{html.escape(metadata.get("writer", "不明"))}</p>'
             f"</div>"
             f'<nav class="toc">'
             f"<h2>目次</h2>"

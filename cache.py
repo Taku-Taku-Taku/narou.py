@@ -37,6 +37,27 @@ class CacheManager:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(value, f, ensure_ascii=False, indent=2)
 
+    def _bin_path(self, category: str, key: str) -> str:
+        safe_key = key.replace("/", "_").replace("\\", "_")
+        category_dir = os.path.join(self.cache_dir, category)
+        os.makedirs(category_dir, exist_ok=True)
+        return os.path.join(category_dir, f"{safe_key}.bin")
+
+    def get_bytes(self, category: str, key: str) -> bytes | None:
+        if not self.enabled:
+            return None
+        path = self._bin_path(category, key)
+        if not os.path.exists(path):
+            return None
+        with open(path, "rb") as f:
+            return f.read()
+
+    def set_bytes(self, category: str, key: str, value: bytes):
+        if not self.enabled:
+            return
+        with open(self._bin_path(category, key), "wb") as f:
+            f.write(value)
+
     def clear(self, ncode: str | None = None):
         """キャッシュを削除する
 
@@ -54,5 +75,6 @@ class CacheManager:
             if not os.path.isdir(category_dir):
                 continue
             for filename in os.listdir(category_dir):
-                if filename.startswith(safe_ncode):
+                # "n1234a" 指定で "n1234ab" を巻き込まないよう区切り文字まで比較
+                if filename.startswith((f"{safe_ncode}.", f"{safe_ncode}_")):
                     os.remove(os.path.join(category_dir, filename))

@@ -16,7 +16,7 @@
 
 ## インストール&セットアップ
 
-[Releaseページ](https://github.com/Taku-Taku-Taku/narou/releases/)から最新版をダウンロード＆展開
+[Releaseページ](https://github.com/Taku-Taku-Taku/narou.py/releases/)から最新版をダウンロード＆展開
 ```bash
 uv sync
 ```

@@ -4,6 +4,7 @@ import argparse
 import re
 import sys
 
+import requests
 from tqdm import tqdm
 
 from scraper import NarouScraper
@@ -85,7 +86,7 @@ def main():
 
     # 2. 目次・章構造取得
     print("目次取得中...")
-    toc = scraper.fetch_toc(ncode)
+    toc = scraper.fetch_toc(ncode, total_episodes=metadata["general_all_no"])
 
     # 3. 話数範囲フィルタ
     episodes = toc["episodes"]
@@ -105,7 +106,8 @@ def main():
         ep["body"] = parser.convert(body_html)
         # 挿絵を検出・ダウンロード
         ep["images"] = []
-        for src in IMG_PATTERN.findall(ep["body"]):
+        # 同じ画像が複数回出てきても1回だけ取得する
+        for src in dict.fromkeys(IMG_PATTERN.findall(ep["body"])):
             if src.startswith("//"):
                 # プロトコル相対URL → https に補完
                 url = "https:" + src
@@ -113,7 +115,15 @@ def main():
                 url = src
             else:
                 continue
-            data = scraper.fetch_image(url)
+            try:
+                data = scraper.fetch_image(ncode, url)
+            except requests.RequestException as e:
+                # 削除済み画像などは挿絵を外して続行
+                tqdm.write(f"  警告: 第{ep['number']}話の挿絵を取得できませんでした: {url} ({e})")
+                ep["body"] = re.sub(
+                    rf'<img[^>]+src="{re.escape(src)}"[^>]*>', "", ep["body"]
+                )
+                continue
             ep["images"].append({"src": src, "data": data})
 
     # 5. 章分割 + EPUB生成
