@@ -1,6 +1,5 @@
 """EPUB3生成"""
 
-import html
 import io
 import itertools
 import os
@@ -8,6 +7,8 @@ import re
 
 from ebooklib import epub
 from PIL import Image
+
+from parser import to_vertical_html
 
 STYLESHEET = """\
 @charset "UTF-8";
@@ -28,7 +29,8 @@ h2 {
   margin-bottom: 1em;
 }
 p {
-  text-indent: 1em;
+  /* 字下げは本文の行頭全角スペースに任せる（CSSでも下げると二重になる） */
+  text-indent: 0;
   margin: 0;
 }
 ruby {
@@ -88,6 +90,12 @@ nav.toc a {
 .tcy {
   text-combine-upright: all;
   -webkit-text-combine: horizontal;
+  -epub-text-combine: horizontal;
+}
+.upright {
+  text-orientation: upright;
+  -webkit-text-orientation: upright;
+  -epub-text-orientation: upright;
 }
 """
 
@@ -269,11 +277,11 @@ class EpubGenerator:
                 book.add_item(img_item)
                 body = body.replace(img_data["src"], img_file)
 
-            heading = html.escape(ep["title"] or f"第{ep['number']}話")
+            heading = to_vertical_html(ep["title"] or f"第{ep['number']}話")
             total_ep = metadata.get("general_all_no", "")
             ep_info = f"#{ep['number']} / {total_ep}" if total_ep else f"#{ep['number']}"
             chapter.content = (
-                f'<p class="ep-number">{ep_info}</p>\n' f"<h2>{heading}</h2>\n{body}"
+                f'<p class="ep-number">{to_vertical_html(ep_info)}</p>\n' f"<h2>{heading}</h2>\n{body}"
             )
 
             book.add_item(chapter)
@@ -284,9 +292,10 @@ class EpubGenerator:
         toc_link_items = []
         for ep in volume["episodes"]:
             num = ep["number"]
-            ep_title = html.escape(ep["title"] or f"第{num}話")
+            ep_title = ep["title"] or f"第{num}話"
             toc_link_items.append(
-                f'<li><a href="ep_{num:05d}.xhtml">#{num}　{ep_title}</a></li>'
+                f'<li><a href="ep_{num:05d}.xhtml">'
+                f"{to_vertical_html(f'#{num}　{ep_title}')}</a></li>"
             )
         toc_links = "\n".join(toc_link_items)
         title_page = epub.EpubHtml(
@@ -295,12 +304,12 @@ class EpubGenerator:
             lang="ja",
         )
         title_page.add_item(style)
-        subtitle_html = f"<h2>{html.escape(vol_subtitle)}</h2>" if vol_subtitle else ""
+        subtitle_html = f"<h2>{to_vertical_html(vol_subtitle)}</h2>" if vol_subtitle else ""
         title_page.content = (
             f'<div class="titlepage">'
-            f"<h1>{html.escape(title)}</h1>"
+            f"<h1>{to_vertical_html(title)}</h1>"
             f"{subtitle_html}"
-            f'<p class="author">{html.escape(metadata.get("writer", "不明"))}</p>'
+            f'<p class="author">{to_vertical_html(metadata.get("writer", "不明"))}</p>'
             f"</div>"
             f'<nav class="toc">'
             f"<h2>目次</h2>"
