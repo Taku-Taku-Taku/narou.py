@@ -1,13 +1,20 @@
 """なろう→Kindle縦書きEPUB変換ツール"""
 
 import argparse
+import math
 import re
 import sys
+import time
 
 import requests
 from tqdm import tqdm
 
-from scraper import NarouScraper
+from scraper import (
+    DOWNLOAD_INTERVAL,
+    DOWNLOAD_WAIT_STEPS,
+    STEPS_WAIT_TIME,
+    NarouScraper,
+)
 from parser import RubyParser
 from epub_generator import EpubGenerator
 from cache import CacheManager
@@ -22,6 +29,47 @@ def extract_ncode(text: str) -> str | None:
     """ncodeまたは作品URLからncodeを取り出す（小文字に正規化）"""
     m = NCODE_PATTERN.search(text.strip())
     return m.group(1).lower() if m else None
+
+
+def estimate_remaining(
+    remaining_eps: int,
+    done_eps: int,
+    done_requests: int,
+    elapsed: float,
+    long_wait_time: float,
+    download_counter: int,
+) -> float:
+    """待ち時間の規則から本文取得の残り時間（秒）を見積もる
+
+    N件ごとの長い待ちは発生回数が規則で決まるため、平均に混ぜず別に足す
+    （tqdm標準の見積もりは長い待ちのたびに大きく跳ねる）
+
+    remaining_eps: 残り話数
+    done_eps / done_requests: 取得済みの話数と、その間のリクエスト数（挿絵を含む）
+    elapsed / long_wait_time: 取得開始からの経過秒数と、そのうち長い待ちの秒数
+    download_counter: 長い待ちの周期上の現在位置（NarouScraper.download_counter）
+    """
+    # 1話あたりのリクエスト数（本文 + 挿絵）。実績がなければ本文のみと仮定
+    reqs_per_ep = done_requests / done_eps if done_requests else 1.0
+    remaining_reqs = math.ceil(remaining_eps * reqs_per_ep)
+    if remaining_reqs == 0:
+        return 0.0
+
+    # 長い待ちを除いた1リクエストあたりの実測時間（通信時間を含む）
+    if done_requests:
+        per_req = max((elapsed - long_wait_time) / done_requests, 0.0)
+    else:
+        per_req = DOWNLOAD_INTERVAL
+
+    # 長い待ちは、カウンタが N の倍数（0を除く）のときのリクエスト直前に入る
+    long_waits = 0
+    if DOWNLOAD_WAIT_STEPS > 0:
+        first = max(download_counter, 1)
+        last = download_counter + remaining_reqs - 1
+        long_waits = last // DOWNLOAD_WAIT_STEPS - (first - 1) // DOWNLOAD_WAIT_STEPS
+    long_wait = max(STEPS_WAIT_TIME, DOWNLOAD_INTERVAL)
+
+    return remaining_reqs * per_req + long_waits * long_wait
 
 
 def parse_args():
@@ -120,7 +168,30 @@ def main():
         return
 
     # 4. 本文取得 + ルビ変換 + 画像ダウンロード
-    for ep in tqdm(episodes, desc="本文取得中", unit="話"):
+    # 残り時間はtqdm標準ではなく estimate_remaining の見積もりを表示する
+    start_time = time.monotonic()
+    start_requests = scraper.request_count
+    start_long_wait = scraper.long_wait_total
+
+    def eta_text(done_eps: int) -> str:
+        eta = estimate_remaining(
+            remaining_eps=len(episodes) - done_eps,
+            done_eps=done_eps,
+            done_requests=scraper.request_count - start_requests,
+            elapsed=time.monotonic() - start_time,
+            long_wait_time=scraper.long_wait_total - start_long_wait,
+            download_counter=scraper.download_counter,
+        )
+        return f"残り約{tqdm.format_interval(eta)}"
+
+    progress = tqdm(
+        episodes,
+        desc="本文取得中",
+        unit="話",
+        bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]",
+        postfix=eta_text(0),
+    )
+    for i, ep in enumerate(progress):
         body_html = scraper.fetch_episode(ncode, ep["number"])
         ep["body"] = parser.convert(body_html)
         # 挿絵を検出・ダウンロード
@@ -144,6 +215,7 @@ def main():
                 )
                 continue
             ep["images"].append({"src": src, "data": data})
+        progress.set_postfix_str(eta_text(i + 1), refresh=False)
 
     # 5. 章分割 + EPUB生成
     volumes = generator.split_into_volumes(toc["chapters"], episodes)

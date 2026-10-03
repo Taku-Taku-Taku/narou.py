@@ -23,6 +23,9 @@ class NarouScraper:
         self.cache = cache
         self._last_download_time = 0.0
         self._download_counter = 0
+        # 残り時間の見積もり用の計測値
+        self.request_count = 0  # ダウンロード系リクエストの累計
+        self.long_wait_total = 0.0  # N話ごとの長い待ちで待機した秒数の合計
         self._last_api_time = 0.0
         self._is_first_api_request = True
 
@@ -63,6 +66,7 @@ class NarouScraper:
         ):
             # N話ごとの長めのウェイト
             time.sleep(max_wait)
+            self.long_wait_total += max_wait
         elif self._download_counter > 0:
             # 通常の1話ごとのウェイト
             elapsed = now - self._last_download_time
@@ -70,7 +74,13 @@ class NarouScraper:
                 time.sleep(DOWNLOAD_INTERVAL - elapsed)
 
         self._download_counter += 1
+        self.request_count += 1
         self._last_download_time = time.monotonic()
+
+    @property
+    def download_counter(self) -> int:
+        """長い待ちの周期上の位置（直近の連続ダウンロードのリクエスト数）"""
+        return self._download_counter
 
     def _wait_for_api(self):
         """なろうAPIリクエスト用のレート制限（初回は除く）"""
