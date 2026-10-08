@@ -4,6 +4,7 @@ import io
 import itertools
 import os
 import re
+from datetime import datetime
 
 from ebooklib import epub
 from PIL import Image
@@ -68,6 +69,10 @@ nav.toc {
 }
 nav.toc h2 {
   font-size: 1.2em;
+  margin-bottom: 0.5em;
+}
+nav.toc .fetched-at {
+  font-size: 0.85em;
   margin-bottom: 0.5em;
 }
 nav.toc ol {
@@ -213,7 +218,7 @@ class EpubGenerator:
 
         return volumes
 
-    def generate(self, metadata: dict, volume: dict) -> str:
+    def generate(self, metadata: dict, volume: dict, fetched_at: datetime) -> str:
         """1巻分のEPUBを生成"""
         book = epub.EpubBook()
 
@@ -298,6 +303,10 @@ class EpubGenerator:
                 f"{to_vertical_html(f'#{num}　{ep_title}')}</a></li>"
             )
         toc_links = "\n".join(toc_link_items)
+        fetched_text = (
+            f"取得日時　{fetched_at.year}年{fetched_at.month}月{fetched_at.day}日"
+            f"　{fetched_at.hour}時{fetched_at.minute:02d}分"
+        )
         title_page = epub.EpubHtml(
             title=vol_title,
             file_name="titlepage.xhtml",
@@ -313,6 +322,7 @@ class EpubGenerator:
             f"</div>"
             f'<nav class="toc">'
             f"<h2>目次</h2>"
+            f'<p class="fetched-at">{to_vertical_html(fetched_text)}</p>'
             f"<ol>{toc_links}</ol>"
             f"</nav>"
         )

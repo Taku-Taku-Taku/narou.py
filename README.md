@@ -33,6 +33,9 @@ uv run main.py <ncode>
 # 話数を指定して変換 (例：1〜10話)
 uv run main.py <ncode> --start 1 --end 10
 
+# 各話のURLを指定すると、その話から最終話までを変換 (例：276話〜最終話)
+uv run main.py https://ncode.syosetu.com/n6734gj/276/
+
 # 画像サイズを指定 (指定しなければ元の解像度のまま)
 uv run main.py <ncode> --image-size medium
 
@@ -54,12 +57,14 @@ uv run main.py --clear-cache
 
 各小説のURL https://ncode.syosetu.com/n0498fr/ （例：病毒の王 水木あおい）の **n0498fr** の部分です。
 大文字・小文字はどちらでも構いません。作品ページのURL（例：`https://ncode.syosetu.com/n0498fr/`）をそのまま指定することもできます。
+各話のURL（例：`https://ncode.syosetu.com/n0498fr/10/`）を指定すると、その話から最終話までを変換します。
 
 </details>
 
 ### 出力されるファイル
 
 - `output/作品タイトル(ncode)_開始話-終了話.epub` という名前で保存されます。
+- 目次には取得日時が表示されます。
 - 挿絵を含めて180MBを超える場合は、章の区切りで複数のファイルに分割されます。
 
 ### Kindle への転送
@@ -88,7 +93,7 @@ uv run main.py --clear-cache
 
 | オプション | 説明 |
 |---|---|
-| `--start N` | 開始話数 |
+| `--start N` | 開始話数（各話のURLを指定した場合も、こちらが優先されます） |
 | `--end N` | 終了話数 |
 | `--image-size` | 挿絵の最大解像度。`small` (6型: 1072×1448) / `medium` (7型: 1236×1648) / `large` (10型: 1860×2480)。未指定時はリサイズなし |
 | `-o`, `--output` | 出力フォルダ (デフォルト: `output`。無ければ自動で作成) |
@@ -106,6 +111,7 @@ uv run main.py --clear-cache
 ## 更新履歴
 - 2026/2/15　リリース
 - 2026/10/3　v1.1.0：変換時の文字化け・画像まわりの不具合を修正、連載中作品の新話を自動取得
+- 2026/10/9　各話のURLを指定するとその話から最終話までを変換、目次に取得日時を表示
 
 もし、不具合・改善点等ありましたら、issueやpull requestなどを送っていただければ幸いです。
 

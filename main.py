@@ -5,6 +5,7 @@ import math
 import re
 import sys
 import time
+from datetime import datetime
 
 import requests
 from tqdm import tqdm
@@ -23,12 +24,20 @@ IMG_PATTERN = re.compile(r'<img[^>]+src="([^"]+)"')
 
 # ncode単体、または作品・各話のURL (https://ncode.syosetu.com/n1234ab/ など)
 NCODE_PATTERN = re.compile(r"(?:^|/)(n\d{4}[a-z]+)(?:/|$)", re.IGNORECASE)
+# 各話のURL (https://ncode.syosetu.com/n1234ab/276/) の話数部分
+EPISODE_PATTERN = re.compile(r"/n\d{4}[a-z]+/(\d+)/?(?:[?#]|$)", re.IGNORECASE)
 
 
 def extract_ncode(text: str) -> str | None:
     """ncodeまたは作品URLからncodeを取り出す（小文字に正規化）"""
     m = NCODE_PATTERN.search(text.strip())
     return m.group(1).lower() if m else None
+
+
+def extract_episode(text: str) -> int | None:
+    """各話のURLから話数を取り出す（作品URLやncode単体ならNone）"""
+    m = EPISODE_PATTERN.search(text.strip())
+    return int(m.group(1)) if m else None
 
 
 def estimate_remaining(
@@ -79,7 +88,8 @@ def parse_args():
     p.add_argument(
         "ncode",
         nargs="?",
-        help="作品のNコードまたはURL (例: n1234ab, https://ncode.syosetu.com/n1234ab/)",
+        help="作品のNコードまたはURL (例: n1234ab, https://ncode.syosetu.com/n1234ab/)。"
+        "各話のURLを指定するとその話から最終話までを変換",
     )
     p.add_argument("--start", type=int, default=None, help="開始話数")
     p.add_argument("--end", type=int, default=None, help="終了話数")
@@ -111,6 +121,9 @@ def main():
                 file=sys.stderr,
             )
             sys.exit(1)
+        # 各話のURLなら、その話を開始話数にする（--start の指定が優先）
+        if args.start is None:
+            args.start = extract_episode(args.ncode)
 
     # キャッシュクリア
     if args.clear_cache:
@@ -140,6 +153,9 @@ def main():
         image_max_width=img_w,
         image_max_height=img_h,
     )
+
+    # 目次に載せる取得日時
+    fetched_at = datetime.now()
 
     # 1. メタデータ取得
     print(f"メタデータ取得中: {ncode}")
@@ -220,7 +236,7 @@ def main():
     # 5. 章分割 + EPUB生成
     volumes = generator.split_into_volumes(toc["chapters"], episodes)
     for vol in tqdm(volumes, desc="EPUB生成中", unit="巻"):
-        path = generator.generate(metadata, vol)
+        path = generator.generate(metadata, vol, fetched_at)
         tqdm.write(f"  生成: {path}")
 
     print("完了")
