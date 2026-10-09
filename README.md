@@ -33,8 +33,8 @@ uv run main.py <ncode>
 # 話数を指定して変換 (例：1〜10話)
 uv run main.py <ncode> --start 1 --end 10
 
-# 各話のURLを指定すると、その話から最終話までを変換 (例：276話〜最終話)
-uv run main.py https://ncode.syosetu.com/n6734gj/276/
+# 各話のURLを指定すると、その話から最終話までを変換
+uv run main.py https://ncode.syosetu.com/<ncode>/<話数>/
 
 # 画像サイズを指定 (指定しなければ元の解像度のまま)
 uv run main.py <ncode> --image-size medium
@@ -58,6 +58,7 @@ uv run main.py --clear-cache
 各小説のURL https://ncode.syosetu.com/n0498fr/ （例：病毒の王 水木あおい）の **n0498fr** の部分です。
 大文字・小文字はどちらでも構いません。作品ページのURL（例：`https://ncode.syosetu.com/n0498fr/`）をそのまま指定することもできます。
 各話のURL（例：`https://ncode.syosetu.com/n0498fr/10/`）を指定すると、その話から最終話までを変換します。
+※ 例に挙げた作品は説明のために使っているだけで、本ツールとは関係ありません。
 
 </details>
 
