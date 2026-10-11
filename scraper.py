@@ -19,7 +19,7 @@ API_REQUEST_INTERVAL = 3.0  # なろうAPIリクエスト間のウェイト（�
 class NarouScraper:
     def __init__(self, cache=None):
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "narou.py/1.1.0"})
+        self.session.headers.update({"User-Agent": "narou.py/1.1.2"})
         self.cache = cache
         self._last_download_time = 0.0
         self._download_counter = 0
