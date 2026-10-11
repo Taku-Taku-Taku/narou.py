@@ -1,5 +1,6 @@
 """EPUB3生成"""
 
+import html
 import io
 import itertools
 import os
@@ -86,6 +87,19 @@ nav.toc a {
   text-decoration: none;
   color: inherit;
 }
+.colophon {
+  margin-top: 30%;
+}
+.colophon h1 {
+  font-size: 1.3em;
+  margin-bottom: 0.5em;
+}
+.colophon .author {
+  margin-bottom: 2em;
+}
+.colophon .url {
+  font-size: 0.85em;
+}
 .ep-number {
   text-indent: 0;
   font-size: 0.85em;
@@ -112,6 +126,18 @@ IMAGE_QUALITY = 85
 
 # 拡張子 → EPUBのコアメディアタイプ
 MEDIA_TYPES = {"jpg": "image/jpeg"}
+
+
+def _format_date(dt: datetime) -> str:
+    return f"{dt.year}年{dt.month}月{dt.day}日"
+
+
+def _format_api_date(text: str) -> str:
+    """なろうAPIの日時 (2024-01-02 03:04:05) を日付表記にする（解釈できなければそのまま）"""
+    try:
+        return _format_date(datetime.strptime(text, "%Y-%m-%d %H:%M:%S"))
+    except (TypeError, ValueError):
+        return text or "不明"
 
 
 def _episode_size(ep: dict) -> int:
@@ -304,7 +330,7 @@ class EpubGenerator:
             )
         toc_links = "\n".join(toc_link_items)
         fetched_text = (
-            f"取得日時　{fetched_at.year}年{fetched_at.month}月{fetched_at.day}日"
+            f"取得日時　{_format_date(fetched_at)}"
             f"　{fetched_at.hour}時{fetched_at.minute:02d}分"
         )
         title_page = epub.EpubHtml(
@@ -328,8 +354,13 @@ class EpubGenerator:
         )
         book.add_item(title_page)
 
+        # 奥付（最終ページ）
+        colophon_page = self._colophon_page(metadata, volume, fetched_text)
+        colophon_page.add_item(style)
+        book.add_item(colophon_page)
+
         book.toc = toc_items
-        book.spine = [title_page] + epub_chapters
+        book.spine = [title_page] + epub_chapters + [colophon_page]
 
         # ナビゲーション（EPUB仕様上必須だがspineには含めない）
         book.add_item(epub.EpubNcx())
@@ -345,3 +376,54 @@ class EpubGenerator:
         filepath = os.path.join(self.output_dir, filename)
         epub.write_epub(filepath, book)
         return filepath
+
+    def _colophon_page(
+        self, metadata: dict, volume: dict, fetched_text: str
+    ) -> epub.EpubHtml:
+        """題名・収録話数・掲載日などをまとめた奥付ページ"""
+        ncode = metadata.get("ncode", "unknown").lower()
+        eps = volume["episodes"]
+        total_ep = metadata.get("general_all_no", "")
+        if metadata.get("novel_type") == 2:
+            recorded = "短編"
+            status = ""
+        else:
+            recorded = f"第{eps[0]['number']}話〜第{eps[-1]['number']}話"
+            if total_ep:
+                recorded += f"（全{total_ep}話）"
+            # end: 0=完結済, 1=連載中
+            status = "連載中" if metadata.get("end") == 1 else "完結済"
+
+        lines = [f"収録　{recorded}"]
+        if status:
+            lines.append(f"状態　{status}")
+        lines += [
+            # 日付の行は見出しの長さを揃えて、日付の頭を合わせる
+            f"初回掲載　　{_format_api_date(metadata.get('general_firstup', ''))}",
+            f"最新話掲載　{_format_api_date(metadata.get('general_lastup', ''))}",
+            fetched_text.replace("取得日時　", "取得日時　　", 1),
+        ]
+        lines_html = "".join(f"<p>{to_vertical_html(line)}</p>" for line in lines)
+
+        # URLは縦書き変換すると全角で縦に長く並ぶため、そのまま（横倒し）で載せる
+        url = f"https://ncode.syosetu.com/{ncode}/"
+        title = metadata["title"]
+        vol_subtitle = volume["title"]
+        subtitle_html = f"<h2>{to_vertical_html(vol_subtitle)}</h2>" if vol_subtitle else ""
+
+        page = epub.EpubHtml(
+            title="奥付",
+            file_name="colophon.xhtml",
+            lang="ja",
+        )
+        page.content = (
+            f'<div class="colophon">'
+            f"<h1>{to_vertical_html(title)}</h1>"
+            f"{subtitle_html}"
+            f'<p class="author">{to_vertical_html(metadata.get("writer", "不明"))}</p>'
+            f"{lines_html}"
+            f"<p>{to_vertical_html('掲載　小説家になろう')}</p>"
+            f'<p class="url">{html.escape(url)}</p>'
+            f"</div>"
+        )
+        return page
