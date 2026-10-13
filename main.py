@@ -59,13 +59,13 @@ def estimate_remaining(
     download_counter: 長い待ちの周期上の現在位置（NarouScraper.download_counter）
     """
     # 1話あたりのリクエスト数（本文 + 挿絵）。実績がなければ本文のみと仮定
-    reqs_per_ep = done_requests / done_eps if done_requests else 1.0
+    reqs_per_ep = done_requests / done_eps if done_eps and done_requests else 1.0
     remaining_reqs = math.ceil(remaining_eps * reqs_per_ep)
     if remaining_reqs == 0:
         return 0.0
 
     # 長い待ちを除いた1リクエストあたりの実測時間（通信時間を含む）
-    if done_requests:
+    if done_eps and done_requests:
         per_req = max((elapsed - long_wait_time) / done_requests, 0.0)
     else:
         per_req = DOWNLOAD_INTERVAL
@@ -185,16 +185,23 @@ def main():
 
     # 4. 本文取得 + ルビ変換 + 画像ダウンロード
     # 残り時間はtqdm標準ではなく estimate_remaining の見積もりを表示する
-    start_time = time.monotonic()
+    # キャッシュから読む話は通信しないため、見積もりはキャッシュにない話だけで行う
+    uncached = {
+        ep["number"]
+        for ep in episodes
+        if not cache.has("episode", f"{ncode}_{ep['number']}")
+    }
     start_requests = scraper.request_count
     start_long_wait = scraper.long_wait_total
+    fetched_eps = 0  # 取得したキャッシュにない話の数
+    fetch_time = 0.0  # その取得にかかった秒数の合計
 
-    def eta_text(done_eps: int) -> str:
+    def eta_text() -> str:
         eta = estimate_remaining(
-            remaining_eps=len(episodes) - done_eps,
-            done_eps=done_eps,
+            remaining_eps=len(uncached) - fetched_eps,
+            done_eps=fetched_eps,
             done_requests=scraper.request_count - start_requests,
-            elapsed=time.monotonic() - start_time,
+            elapsed=fetch_time,
             long_wait_time=scraper.long_wait_total - start_long_wait,
             download_counter=scraper.download_counter,
         )
@@ -205,9 +212,10 @@ def main():
         desc="本文取得中",
         unit="話",
         bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt} [{elapsed}{postfix}]",
-        postfix=eta_text(0),
+        postfix=eta_text(),
     )
-    for i, ep in enumerate(progress):
+    for ep in progress:
+        ep_start = time.monotonic()
         body_html = scraper.fetch_episode(ncode, ep["number"])
         ep["body"] = parser.convert(body_html)
         # 挿絵を検出・ダウンロード
@@ -231,7 +239,10 @@ def main():
                 )
                 continue
             ep["images"].append({"src": src, "data": data})
-        progress.set_postfix_str(eta_text(i + 1), refresh=False)
+        if ep["number"] in uncached:
+            fetched_eps += 1
+            fetch_time += time.monotonic() - ep_start
+        progress.set_postfix_str(eta_text(), refresh=False)
 
     # 5. 章分割 + EPUB生成
     volumes = generator.split_into_volumes(toc["chapters"], episodes)

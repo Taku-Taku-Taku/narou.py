@@ -35,6 +35,10 @@ p {
   text-indent: 0;
   margin: 0;
 }
+p.indent {
+  /* 行頭に全角スペースのない地の文（parser.pyで判定） */
+  text-indent: 1em;
+}
 ruby {
   ruby-position: over;
 }
@@ -130,6 +134,21 @@ MEDIA_TYPES = {"jpg": "image/jpeg"}
 
 def _format_date(dt: datetime) -> str:
     return f"{dt.year}年{dt.month}月{dt.day}日"
+
+
+def _format_datetime(dt: datetime) -> str:
+    return f"{_format_date(dt)}　{dt.hour}時{dt.minute:02d}分"
+
+
+def _title_block_html(metadata: dict, volume: dict) -> str:
+    """表紙と奥付に共通の題名・副題・作者"""
+    subtitle = volume["title"]
+    subtitle_html = f"<h2>{to_vertical_html(subtitle)}</h2>" if subtitle else ""
+    return (
+        f"<h1>{to_vertical_html(metadata['title'])}</h1>"
+        f"{subtitle_html}"
+        f'<p class="author">{to_vertical_html(metadata.get("writer", "不明"))}</p>'
+    )
 
 
 def _format_api_date(text: str) -> str:
@@ -329,23 +348,15 @@ class EpubGenerator:
                 f"{to_vertical_html(f'#{num}　{ep_title}')}</a></li>"
             )
         toc_links = "\n".join(toc_link_items)
-        fetched_text = (
-            f"取得日時　{_format_date(fetched_at)}"
-            f"　{fetched_at.hour}時{fetched_at.minute:02d}分"
-        )
+        fetched_text = f"取得日時　{_format_datetime(fetched_at)}"
         title_page = epub.EpubHtml(
             title=vol_title,
             file_name="titlepage.xhtml",
             lang="ja",
         )
         title_page.add_item(style)
-        subtitle_html = f"<h2>{to_vertical_html(vol_subtitle)}</h2>" if vol_subtitle else ""
         title_page.content = (
-            f'<div class="titlepage">'
-            f"<h1>{to_vertical_html(title)}</h1>"
-            f"{subtitle_html}"
-            f'<p class="author">{to_vertical_html(metadata.get("writer", "不明"))}</p>'
-            f"</div>"
+            f'<div class="titlepage">{_title_block_html(metadata, volume)}</div>'
             f'<nav class="toc">'
             f"<h2>目次</h2>"
             f'<p class="fetched-at">{to_vertical_html(fetched_text)}</p>'
@@ -355,7 +366,7 @@ class EpubGenerator:
         book.add_item(title_page)
 
         # 奥付（最終ページ）
-        colophon_page = self._colophon_page(metadata, volume, fetched_text)
+        colophon_page = self._colophon_page(metadata, volume, fetched_at)
         colophon_page.add_item(style)
         book.add_item(colophon_page)
 
@@ -378,7 +389,7 @@ class EpubGenerator:
         return filepath
 
     def _colophon_page(
-        self, metadata: dict, volume: dict, fetched_text: str
+        self, metadata: dict, volume: dict, fetched_at: datetime
     ) -> epub.EpubHtml:
         """題名・収録話数・掲載日などをまとめた奥付ページ"""
         ncode = metadata.get("ncode", "unknown").lower()
@@ -391,8 +402,8 @@ class EpubGenerator:
             recorded = f"第{eps[0]['number']}話〜第{eps[-1]['number']}話"
             if total_ep:
                 recorded += f"（全{total_ep}話）"
-            # end: 0=完結済, 1=連載中
-            status = "連載中" if metadata.get("end") == 1 else "完結済"
+            # end: 0=完結済, 1=連載中。値が取れないときは、なろうの表示に合わせて連載中とする
+            status = "完結済" if metadata.get("end") == 0 else "連載中"
 
         lines = [f"収録　{recorded}"]
         if status:
@@ -401,15 +412,12 @@ class EpubGenerator:
             # 日付の行は見出しの長さを揃えて、日付の頭を合わせる
             f"初回掲載　　{_format_api_date(metadata.get('general_firstup', ''))}",
             f"最新話掲載　{_format_api_date(metadata.get('general_lastup', ''))}",
-            fetched_text.replace("取得日時　", "取得日時　　", 1),
+            f"取得日時　　{_format_datetime(fetched_at)}",
         ]
         lines_html = "".join(f"<p>{to_vertical_html(line)}</p>" for line in lines)
 
         # URLは縦書き変換すると全角で縦に長く並ぶため、そのまま（横倒し）で載せる
         url = f"https://ncode.syosetu.com/{ncode}/"
-        title = metadata["title"]
-        vol_subtitle = volume["title"]
-        subtitle_html = f"<h2>{to_vertical_html(vol_subtitle)}</h2>" if vol_subtitle else ""
 
         page = epub.EpubHtml(
             title="奥付",
@@ -418,9 +426,7 @@ class EpubGenerator:
         )
         page.content = (
             f'<div class="colophon">'
-            f"<h1>{to_vertical_html(title)}</h1>"
-            f"{subtitle_html}"
-            f'<p class="author">{to_vertical_html(metadata.get("writer", "不明"))}</p>'
+            f"{_title_block_html(metadata, volume)}"
             f"{lines_html}"
             f"<p>{to_vertical_html('掲載　小説家になろう')}</p>"
             f'<p class="url">{html.escape(url)}</p>'

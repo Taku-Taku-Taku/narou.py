@@ -2,9 +2,15 @@
 
 import hashlib
 import time
+import tomllib
+from pathlib import Path
 
 import requests
 from bs4 import BeautifulSoup
+
+# 版数は pyproject.toml の1か所で管理する
+with open(Path(__file__).with_name("pyproject.toml"), "rb") as f:
+    VERSION = tomllib.load(f)["project"]["version"]
 
 API_URL = "https://api.syosetu.com/novelapi/api/"
 BASE_URL = "https://ncode.syosetu.com"
@@ -19,7 +25,7 @@ API_REQUEST_INTERVAL = 3.0  # なろうAPIリクエスト間のウェイト（�
 class NarouScraper:
     def __init__(self, cache=None):
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "narou.py/1.1.2"})
+        self.session.headers.update({"User-Agent": f"narou.py/{VERSION}"})
         self.cache = cache
         self._last_download_time = 0.0
         self._download_counter = 0

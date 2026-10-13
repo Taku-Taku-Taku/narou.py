@@ -6,6 +6,7 @@
   《《傍点対象》》  → <em class="sesame">傍点対象</em>
 
 縦書き向けの文字変換（タグ外のテキストのみ）:
+  英文（2語以上、または8文字以上） → 半角にして横倒し（全角で書かれた英文も同じ）
   英数字のかたまり（12,000 / Lv.10 / B-29 など記号でつながった単位）を全体の文字数で判定
     1文字      → 全角 (A→Ａ, 5→５)
     2文字      → 縦中横 <span class="tcy">（横書きのまま1文字分に収める）
@@ -14,6 +15,9 @@
   ！？の連続も同様（2文字まで縦中横、3文字以上は全角）
   ギリシャ・キリル文字   → <span class="upright">（横倒しを防ぐ）
   その他の半角記号       → 全角 (%→％, (→（, -→－ など)
+  " と ”                → 段落内で交互に 〝 〟（“ は常に 〝）
+
+行頭に全角スペースのない地の文の段落には <p class="indent"> を付けて字下げする
 """
 
 import html
@@ -48,35 +52,54 @@ def _ruby_tag(base: str, ruby: str) -> str:
 _ASCII_TO_ZENKAKU = {c: c + 0xFEE0 for c in range(0x21, 0x7F)}
 # ~ は全角チルダ(～)ではなく、縦書きで正しく回転する波ダッシュ(〜)にする
 _ASCII_TO_ZENKAKU[ord("~")] = "〜"
-# 全角英数字 → 半角（判定ルールを半角・全角で揃えるため最初に正規化する）
-_ZENKAKU_ALNUM_TO_ASCII = str.maketrans(
-    "０１２３４５６７８９"
-    "ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ"
-    "ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ",
-    "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+# 変換前の正規化（1回のtranslateでまとめて行う）
+# - 全角英数字 → 半角（判定ルールを半角・全角で揃えるため）
+# - 縦書きで横倒し・位置ずれする文字の置き換え
+_NORMALIZE = str.maketrans(
+    {
+        **{
+            z: a
+            for z, a in zip(
+                "０１２３４５６７８９"
+                "ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺ"
+                "ａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ",
+                "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz",
+            )
+        },
+        "\u2212": "－",  # − マイナス
+        "\u2010": "－",  # ‐ ハイフン
+        "\u2011": "－",  # ‑ ノーブレークハイフン
+        "\u22ef": "…",  # ⋯ 数学用の三点リーダ（縦書きで縦にならない）
+        "\u2018": "＇",  # ‘
+        "\u2019": "＇",  # ’
+    }
 )
 
-# 個別に置き換える文字（縦書きで横倒し・位置ずれするもの）
-_CHAR_REPLACE = {
-    "\u2212": "－",  # − マイナス
-    "\u2010": "－",  # ‐ ハイフン
-    "\u2011": "－",  # ‑ ノーブレークハイフン
-    "\u22ef": "…",  # ⋯ 数学用の三点リーダ（縦書きで縦にならない）
-    "\u2018": "＇",  # ‘
-    "\u2019": "＇",  # ’
-}
+# HTMLタグとそれ以外（テキスト）に分けるパターン
+_TAG_SPLIT = re.compile(r"(<[^>]*>)")
+# 引用符の開き・閉じの対応をリセットする段落の区切り
+_PARAGRAPH_BOUNDARY = re.compile(r"</?(?:p|div|br|hr)\b", re.IGNORECASE)
 
-# 直後の引用符を「開き」とみなす文字（開き括弧類）
-_OPENERS = "「『（(［[｛{〔【〈《〝"
+# 段落の最初の文字（ルビなどのタグは飛ばす。改行・挿絵・空段落なら文字なし）
+_PARAGRAPH_HEAD = re.compile(r"<p>((?:<(?!br|img|/p)[^>]*>)*)([^<])?")
+# 字下げしない段落の先頭文字（既に字下げ済み・括弧で始まる会話文など）
+_NO_INDENT_HEAD = "\u3000 「『（(［[｛{〔【〈《〝\"“"
 
-# HTMLタグを避けてテキスト部分だけを処理するためのパターン
-_TEXT_OUTSIDE_TAGS = re.compile(r"([^<>]+)(?=<|$)")
+# 英文: 英数字・記号の単語が空白で続く部分（全角英数字は半角に正規化した後で判定する）
+_ENGLISH_WORD = r"[A-Za-z0-9_.,!?'&:;\-．，！？＇＆：；－]+"
+_ENGLISH_CANDIDATE = re.compile(rf"{_ENGLISH_WORD}(?:[ \u3000]+{_ENGLISH_WORD})*")
+# 英文中の全角の記号・空白 → 半角
+_ENGLISH_TO_ASCII = str.maketrans("．，！？＇＆：；－\u3000", ".,!?'&:;- ")
+# 英文とみなす最小文字数（これ以上でアルファベットを含めば、2語未満でも英文とする）
+_ENGLISH_MIN_LENGTH = 8
 
 # 英数字のかたまり: 英数字の間に挟まった区切り記号も含めて1単位とする
 # 「、」は「12、000」のように後ろが3桁ちょうどの数字のときだけ桁区切りとみなす
+# 末尾の「:」（Re:ゼロ など）もかたまりに含める
 _ALNUM_TOKEN = re.compile(
     r"[A-Za-z0-9]+"
-    r"(?:(?:[.,:'/\-，．：]|(?<=[0-9])、(?=[0-9]{3}(?![0-9])))[A-Za-z0-9]+)*"
+    r"(?:(?:[.,:'/\-&+，．：＆＋]|(?<=[0-9])、(?=[0-9]{3}(?![0-9])))[A-Za-z0-9]+)*"
+    r"[:：]?"
 )
 # 感嘆符・疑問符の連続
 _EXCLAMATION = re.compile(r"[!?！？]+")
@@ -103,10 +126,43 @@ def _to_zenkaku(text: str) -> str:
     return text.translate(_ASCII_TO_ZENKAKU)
 
 
-def _convert_vertical(text: str) -> str:
-    """エスケープ解除済みのテキストを縦書き向けに変換し、HTML断片を返す"""
-    text = text.translate(_ZENKAKU_ALNUM_TO_ASCII)
-    text = "".join(_CHAR_REPLACE.get(c, c) for c in text)
+class _QuoteState:
+    """段落内の \" と ” の開き・閉じを交互に決めるための状態"""
+
+    def __init__(self):
+        self.is_open = False
+
+
+def _is_english_sentence(text: str) -> bool:
+    """2語以上、または一定長以上でアルファベットを含む"""
+    if not re.search(r"[A-Za-z]", text):
+        return False
+    return " " in text or len(text) >= _ENGLISH_MIN_LENGTH
+
+
+def to_vertical_html(text: str, quote: _QuoteState | None = None) -> str:
+    """エスケープ解除済みのテキスト（タイトル等）を縦書き向けに変換し、エスケープ済みHTMLを返す
+
+    英文は1文字ずつ縦に並べると読みにくいため、半角のまま（縦書きでは横倒し）残す
+    quote: 段落の途中にタグを挟んで続けて変換するときに、引用符の対応を引き継ぐ
+    """
+    if quote is None:
+        quote = _QuoteState()
+    out = []
+    pos = 0
+    text = text.translate(_NORMALIZE)
+    for m in _ENGLISH_CANDIDATE.finditer(text):
+        english = m.group(0).translate(_ENGLISH_TO_ASCII)
+        if _is_english_sentence(english):
+            out.append(_convert_part(text[pos : m.start()], quote))
+            out.append(html.escape(english, quote=False))
+            pos = m.end()
+    out.append(_convert_part(text[pos:], quote))
+    return "".join(out)
+
+
+def _convert_part(text: str, quote: _QuoteState) -> str:
+    """英文以外の部分（_NORMALIZE で正規化済み）を縦書き向けに変換する"""
     text = _INNER_SPACE.sub("\u3000", text)
 
     out = []
@@ -126,27 +182,39 @@ def _convert_vertical(text: str) -> str:
         elif kind == "upright":
             out.append(f'<span class="upright">{s}</span>')
         elif kind == "dquote":
-            # “ は常に開き。” と " は書き手によって向きがばらつくため、直前の文字で決める
-            prev = text[m.start() - 1] if m.start() > 0 else ""
-            is_open = s == "\u201c" or prev == "" or prev.isspace() or prev in _OPENERS
-            out.append("〝" if is_open else "〟")
+            # “ は常に開き。” と " は書き手によって向きがばらつくため、段落内で開き・閉じを交互にする
+            quote.is_open = s == "\u201c" or not quote.is_open
+            out.append("〝" if quote.is_open else "〟")
         else:
             out.append(_to_zenkaku(s))
     out.append(html.escape(text[pos:], quote=False))
     return "".join(out)
 
 
-def to_vertical_html(text: str) -> str:
-    """プレーンテキスト（タイトル等）を縦書き向けに変換し、エスケープ済みHTMLを返す"""
-    return _convert_vertical(text)
-
-
-def _convert_text_segment(match: re.Match) -> str:
+def _convert_outside_tags(text: str) -> str:
     """HTMLタグの外側のテキスト部分を縦書き向けに変換
 
     &amp; などのエンティティは一度文字に戻してから変換する（記号は全角になる）
+    ルビなどのタグをまたいでも、段落内の引用符の対応は引き継ぐ
     """
-    return _convert_vertical(html.unescape(match.group(0)))
+    out = []
+    quote = _QuoteState()
+    for part in _TAG_SPLIT.split(text):
+        if part.startswith("<"):
+            if _PARAGRAPH_BOUNDARY.match(part):
+                quote = _QuoteState()
+            out.append(part)
+        elif part:
+            out.append(to_vertical_html(html.unescape(part), quote))
+    return "".join(out)
+
+
+def _add_indent(match: re.Match) -> str:
+    """行頭を字下げしていない地の文の段落に字下げ用のclassを付ける"""
+    head = match.group(2)
+    if head is None or head in _NO_INDENT_HEAD:
+        return match.group(0)
+    return '<p class="indent">' + match.group(0)[len("<p>") :]
 
 
 class RubyParser:
@@ -168,5 +236,7 @@ class RubyParser:
             text,
         )
         # 縦書き向けの文字変換（タグ外のテキスト部分のみ）
-        text = _TEXT_OUTSIDE_TAGS.sub(_convert_text_segment, text)
+        text = _convert_outside_tags(text)
+        # 行頭に全角スペースを入れない作品向けに、地の文の段落を字下げ
+        text = _PARAGRAPH_HEAD.sub(_add_indent, text)
         return text

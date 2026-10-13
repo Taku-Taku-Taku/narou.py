@@ -30,6 +30,9 @@ class CacheManager:
         with open(path, "r", encoding="utf-8") as f:
             return json.load(f)
 
+    def has(self, category: str, key: str) -> bool:
+        return self.enabled and os.path.exists(self._path(category, key))
+
     def set(self, category: str, key: str, value):
         if not self.enabled:
             return
