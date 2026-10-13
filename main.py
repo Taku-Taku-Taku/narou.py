@@ -93,12 +93,18 @@ def parse_args():
     )
     p.add_argument("--start", type=int, default=None, help="開始話数")
     p.add_argument("--end", type=int, default=None, help="終了話数")
-    p.add_argument("--no-cache", action="store_true", help="キャッシュを使用しない")
+    p.add_argument(
+        "--refresh",
+        action="store_true",
+        help="作品のキャッシュを削除して取り直す（改稿を反映したいとき）",
+    )
+    # 旧オプション（--refresh に統合）。しばらくは案内を出して --refresh として動かす
+    p.add_argument("--no-cache", action="store_true", help=argparse.SUPPRESS)
     p.add_argument("--output", "-o", default="output", help="出力ディレクトリ")
     p.add_argument(
         "--clear-cache",
         action="store_true",
-        help="キャッシュを削除（ncodeを指定すると該当作品のみ削除）",
+        help="全作品のキャッシュを削除（変換はしない）",
     )
     p.add_argument(
         "--image-size",
@@ -125,21 +131,32 @@ def main():
         if args.start is None:
             args.start = extract_episode(args.ncode)
 
-    # キャッシュクリア
-    if args.clear_cache:
-        cache = CacheManager()
-        cache.clear(ncode)
-        if ncode:
-            print(f"キャッシュを削除しました: {ncode}")
-        else:
-            print("全キャッシュを削除しました")
-            return
+    # 全キャッシュの削除
+    if args.clear_cache and not ncode:
+        CacheManager().clear()
+        print("全キャッシュを削除しました")
+        return
 
     if not ncode:
         print("エラー: ncodeを指定してください", file=sys.stderr)
         sys.exit(1)
 
-    cache = CacheManager(enabled=not args.no_cache)
+    # 旧オプションは --refresh として扱う
+    for old_usage, used in (
+        ("--no-cache", args.no_cache),
+        ("ncodeを付けた --clear-cache", args.clear_cache),
+    ):
+        if used:
+            print(
+                f"注意: {old_usage} は --refresh に変わりました。今回は --refresh として実行します",
+                file=sys.stderr,
+            )
+            args.refresh = True
+
+    cache = CacheManager()
+    if args.refresh:
+        cache.clear(ncode)
+        print(f"キャッシュを削除しました: {ncode}")
     scraper = NarouScraper(cache=cache)
     parser = RubyParser()
     image_presets = {
