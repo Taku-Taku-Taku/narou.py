@@ -8,9 +8,12 @@ from pathlib import Path
 import requests
 from bs4 import BeautifulSoup
 
-# 版数は pyproject.toml の1か所で管理する
-with open(Path(__file__).with_name("pyproject.toml"), "rb") as f:
-    VERSION = tomllib.load(f)["project"]["version"]
+# 版数は pyproject.toml の1か所で管理する（.py だけを持ち出した場合などは unknown）
+try:
+    with open(Path(__file__).with_name("pyproject.toml"), "rb") as f:
+        VERSION = tomllib.load(f)["project"]["version"]
+except (OSError, tomllib.TOMLDecodeError, KeyError):
+    VERSION = "unknown"
 
 API_URL = "https://api.syosetu.com/novelapi/api/"
 BASE_URL = "https://ncode.syosetu.com"
@@ -32,6 +35,7 @@ class NarouScraper:
         # 残り時間の見積もり用の計測値
         self.request_count = 0  # ダウンロード系リクエストの累計
         self.long_wait_total = 0.0  # N話ごとの長い待ちで待機した秒数の合計
+        self.download_time = 0.0  # ダウンロード系リクエストの所要秒数（長い待ちを除く）
         self._last_api_time = 0.0
         self._is_first_api_request = True
 
@@ -88,6 +92,23 @@ class NarouScraper:
         """長い待ちの周期上の位置（直近の連続ダウンロードのリクエスト数）"""
         return self._download_counter
 
+    def _download(self, url: str) -> requests.Response:
+        """レート制限を守ってダウンロードし、所要時間を記録する"""
+        start = time.monotonic()
+        long_wait_before = self.long_wait_total
+        self._wait_for_download()
+        try:
+            resp = self.session.get(url)
+        finally:
+            self.download_time += (
+                time.monotonic() - start - (self.long_wait_total - long_wait_before)
+            )
+        resp.raise_for_status()
+        return resp
+
+    def is_episode_cached(self, ncode: str, number: int) -> bool:
+        return self.cache is not None and self.cache.has("episode", f"{ncode}_{number}")
+
     def _wait_for_api(self):
         """なろうAPIリクエスト用のレート制限（初回は除く）"""
         if self._is_first_api_request:
@@ -123,13 +144,16 @@ class NarouScraper:
             return None
         return metadata
 
-    def fetch_toc(self, ncode: str, total_episodes: int | None = None) -> dict:
+    def fetch_toc(
+        self, ncode: str, total_episodes: int | None = None, refresh: bool = False
+    ) -> dict:
         """目次ページから章構造とエピソード一覧を取得（複数ページ対応）
 
         total_episodes を指定すると、キャッシュの話数と一致する場合のみキャッシュを使う
         （新話の追加・削除があれば目次を取り直す）
+        refresh: キャッシュを読まずに取り直す（取得結果はキャッシュに保存する）
         """
-        cached = self.cache.get("toc", ncode) if self.cache else None
+        cached = self.cache.get("toc", ncode) if self.cache and not refresh else None
         if cached and (
             total_episodes is None or len(cached["episodes"]) == total_episodes
         ):
@@ -142,12 +166,10 @@ class NarouScraper:
         page = 1
 
         while True:
-            self._wait_for_download()
             url = f"{BASE_URL}/{ncode}/"
             if page > 1:
                 url += f"?p={page}"
-            resp = self.session.get(url)
-            resp.raise_for_status()
+            resp = self._download(url)
             soup = BeautifulSoup(resp.text, "lxml")
 
             # 新レイアウト (p-eplist) または旧レイアウト (index_box) を検出
@@ -224,15 +246,17 @@ class NarouScraper:
             self.cache.set("toc", ncode, result)
         return result
 
-    def fetch_episode(self, ncode: str, number: int) -> str:
-        """エピソード本文HTMLを取得"""
-        cached = self.cache.get("episode", f"{ncode}_{number}") if self.cache else None
-        if cached:
-            return cached
+    def fetch_episode(self, ncode: str, number: int, refresh: bool = False) -> str:
+        """エピソード本文HTMLを取得
 
-        self._wait_for_download()
-        resp = self.session.get(f"{BASE_URL}/{ncode}/{number}/")
-        resp.raise_for_status()
+        refresh: キャッシュを読まずに取り直す（取得結果はキャッシュに保存する）
+        """
+        if self.cache and not refresh:
+            cached = self.cache.get("episode", f"{ncode}_{number}")
+            if cached is not None:
+                return cached
+
+        resp = self._download(f"{BASE_URL}/{ncode}/{number}/")
         soup = BeautifulSoup(resp.text, "lxml")
 
         # 新レイアウト: .p-novel__body 内の .p-novel__text
@@ -272,16 +296,17 @@ class NarouScraper:
             self.cache.set("episode", f"{ncode}_{number}", html)
         return html
 
-    def fetch_image(self, ncode: str, url: str) -> bytes:
-        """画像をダウンロード（キャッシュはncode単位で削除できるようncodeを接頭辞にする）"""
+    def fetch_image(self, ncode: str, url: str, refresh: bool = False) -> bytes:
+        """画像をダウンロード（キャッシュはncode単位で削除できるようncodeを接頭辞にする）
+
+        refresh: キャッシュを読まずに取り直す（取得結果はキャッシュに保存する）
+        """
         key = f"{ncode}_{hashlib.sha1(url.encode('utf-8')).hexdigest()}"
-        cached = self.cache.get_bytes("image", key) if self.cache else None
+        cached = self.cache.get_bytes("image", key) if self.cache and not refresh else None
         if cached:
             return cached
 
-        self._wait_for_download()
-        resp = self.session.get(url)
-        resp.raise_for_status()
+        resp = self._download(url)
         if self.cache:
             self.cache.set_bytes("image", key, resp.content)
         return resp.content

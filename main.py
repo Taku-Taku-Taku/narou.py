@@ -4,7 +4,6 @@ import argparse
 import math
 import re
 import sys
-import time
 from datetime import datetime
 
 import requests
@@ -43,9 +42,9 @@ def extract_episode(text: str) -> int | None:
 def estimate_remaining(
     remaining_eps: int,
     done_eps: int,
-    done_requests: int,
-    elapsed: float,
-    long_wait_time: float,
+    done_ep_requests: int,
+    requests: int,
+    download_time: float,
     download_counter: int,
 ) -> float:
     """待ち時間の規則から本文取得の残り時間（秒）を見積もる
@@ -53,22 +52,19 @@ def estimate_remaining(
     N件ごとの長い待ちは発生回数が規則で決まるため、平均に混ぜず別に足す
     （tqdm標準の見積もりは長い待ちのたびに大きく跳ねる）
 
-    remaining_eps: 残り話数
-    done_eps / done_requests: 取得済みの話数と、その間のリクエスト数（挿絵を含む）
-    elapsed / long_wait_time: 取得開始からの経過秒数と、そのうち長い待ちの秒数
+    remaining_eps: 残りの取得が必要な話数
+    done_eps / done_ep_requests: 取得した話数と、その話で行ったリクエスト数（挿絵を含む）
+    requests / download_time: 全リクエスト数と、その所要秒数（長い待ちを除く）
     download_counter: 長い待ちの周期上の現在位置（NarouScraper.download_counter）
     """
     # 1話あたりのリクエスト数（本文 + 挿絵）。実績がなければ本文のみと仮定
-    reqs_per_ep = done_requests / done_eps if done_eps and done_requests else 1.0
+    reqs_per_ep = done_ep_requests / done_eps if done_eps and done_ep_requests else 1.0
     remaining_reqs = math.ceil(remaining_eps * reqs_per_ep)
     if remaining_reqs == 0:
         return 0.0
 
     # 長い待ちを除いた1リクエストあたりの実測時間（通信時間を含む）
-    if done_eps and done_requests:
-        per_req = max((elapsed - long_wait_time) / done_requests, 0.0)
-    else:
-        per_req = DOWNLOAD_INTERVAL
+    per_req = download_time / requests if requests else DOWNLOAD_INTERVAL
 
     # 長い待ちは、カウンタが N の倍数（0を除く）のときのリクエスト直前に入る
     long_waits = 0
@@ -96,7 +92,8 @@ def parse_args():
     p.add_argument(
         "--refresh",
         action="store_true",
-        help="作品のキャッシュを削除して取り直す（改稿を反映したいとき）",
+        help="キャッシュを使わずに取り直す（改稿を反映したいとき）。"
+        "--start/--end を指定するとその範囲だけ取り直す",
     )
     # 旧オプション（--refresh に統合）。しばらくは案内を出して --refresh として動かす
     p.add_argument("--no-cache", action="store_true", help=argparse.SUPPRESS)
@@ -154,9 +151,6 @@ def main():
             args.refresh = True
 
     cache = CacheManager()
-    if args.refresh:
-        cache.clear(ncode)
-        print(f"キャッシュを削除しました: {ncode}")
     scraper = NarouScraper(cache=cache)
     parser = RubyParser()
     image_presets = {
@@ -186,7 +180,9 @@ def main():
 
     # 2. 目次・章構造取得
     print("目次取得中...")
-    toc = scraper.fetch_toc(ncode, total_episodes=metadata["general_all_no"])
+    toc = scraper.fetch_toc(
+        ncode, total_episodes=metadata["general_all_no"], refresh=args.refresh
+    )
 
     # 3. 話数範囲フィルタ
     episodes = toc["episodes"]
@@ -202,24 +198,25 @@ def main():
 
     # 4. 本文取得 + ルビ変換 + 画像ダウンロード
     # 残り時間はtqdm標準ではなく estimate_remaining の見積もりを表示する
-    # キャッシュから読む話は通信しないため、見積もりはキャッシュにない話だけで行う
-    uncached = {
+    # キャッシュから読む話は通信しないため、見積もりは取得が必要な話だけで行う
+    # （--refresh なら対象の話はすべて取り直す）
+    to_fetch = {
         ep["number"]
         for ep in episodes
-        if not cache.has("episode", f"{ncode}_{ep['number']}")
+        if args.refresh or not scraper.is_episode_cached(ncode, ep["number"])
     }
     start_requests = scraper.request_count
-    start_long_wait = scraper.long_wait_total
-    fetched_eps = 0  # 取得したキャッシュにない話の数
-    fetch_time = 0.0  # その取得にかかった秒数の合計
+    start_download_time = scraper.download_time
+    fetched_eps = 0  # 取得した話の数
+    fetched_ep_requests = 0  # その話で行ったリクエスト数
 
     def eta_text() -> str:
         eta = estimate_remaining(
-            remaining_eps=len(uncached) - fetched_eps,
+            remaining_eps=len(to_fetch) - fetched_eps,
             done_eps=fetched_eps,
-            done_requests=scraper.request_count - start_requests,
-            elapsed=fetch_time,
-            long_wait_time=scraper.long_wait_total - start_long_wait,
+            done_ep_requests=fetched_ep_requests,
+            requests=scraper.request_count - start_requests,
+            download_time=scraper.download_time - start_download_time,
             download_counter=scraper.download_counter,
         )
         return f"残り約{tqdm.format_interval(eta)}"
@@ -232,8 +229,8 @@ def main():
         postfix=eta_text(),
     )
     for ep in progress:
-        ep_start = time.monotonic()
-        body_html = scraper.fetch_episode(ncode, ep["number"])
+        ep_requests = scraper.request_count
+        body_html = scraper.fetch_episode(ncode, ep["number"], refresh=args.refresh)
         ep["body"] = parser.convert(body_html)
         # 挿絵を検出・ダウンロード
         ep["images"] = []
@@ -247,7 +244,7 @@ def main():
             else:
                 continue
             try:
-                data = scraper.fetch_image(ncode, url)
+                data = scraper.fetch_image(ncode, url, refresh=args.refresh)
             except requests.RequestException as e:
                 # 削除済み画像などは挿絵を外して続行
                 tqdm.write(f"  警告: 第{ep['number']}話の挿絵を取得できませんでした: {url} ({e})")
@@ -256,9 +253,9 @@ def main():
                 )
                 continue
             ep["images"].append({"src": src, "data": data})
-        if ep["number"] in uncached:
+        if ep["number"] in to_fetch:
             fetched_eps += 1
-            fetch_time += time.monotonic() - ep_start
+            fetched_ep_requests += scraper.request_count - ep_requests
         progress.set_postfix_str(eta_text(), refresh=False)
 
     # 5. 章分割 + EPUB生成

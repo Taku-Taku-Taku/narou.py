@@ -6,7 +6,7 @@
   《《傍点対象》》  → <em class="sesame">傍点対象</em>
 
 縦書き向けの文字変換（タグ外のテキストのみ）:
-  英文（2語以上、または8文字以上） → 半角にして横倒し（全角で書かれた英文も同じ）
+  英文（2語以上、または英字8文字以上） → 半角にして横倒し（全角で書かれた英文も同じ）
   英数字のかたまり（12,000 / Lv.10 / B-29 など記号でつながった単位）を全体の文字数で判定
     1文字      → 全角 (A→Ａ, 5→５)
     2文字      → 縦中横 <span class="tcy">（横書きのまま1文字分に収める）
@@ -15,7 +15,7 @@
   ！？の連続も同様（2文字まで縦中横、3文字以上は全角）
   ギリシャ・キリル文字   → <span class="upright">（横倒しを防ぐ）
   その他の半角記号       → 全角 (%→％, (→（, -→－ など)
-  " と ”                → 段落内で交互に 〝 〟（“ は常に 〝）
+  " と ”                → 段落内で交互に 〝 〟（“ は常に 〝。数字の直後の " は ″。対応が取れない段落は ＂）
 
 行頭に全角スペースのない地の文の段落には <p class="indent"> を付けて字下げする
 """
@@ -82,16 +82,19 @@ _PARAGRAPH_BOUNDARY = re.compile(r"</?(?:p|div|br|hr)\b", re.IGNORECASE)
 
 # 段落の最初の文字（ルビなどのタグは飛ばす。改行・挿絵・空段落なら文字なし）
 _PARAGRAPH_HEAD = re.compile(r"<p>((?:<(?!br|img|/p)[^>]*>)*)([^<])?")
-# 字下げしない段落の先頭文字（既に字下げ済み・括弧で始まる会話文など）
-_NO_INDENT_HEAD = "\u3000 「『（(［[｛{〔【〈《〝\"“"
+# 字下げしない段落の先頭文字（既に字下げ済み・括弧で始まる会話文など。縦書き変換後の文字で判定）
+_NO_INDENT_HEAD = "\u3000 「『（［｛〔【〈《〘〖＜≪〝＂"
 
 # 英文: 英数字・記号の単語が空白で続く部分（全角英数字は半角に正規化した後で判定する）
 _ENGLISH_WORD = r"[A-Za-z0-9_.,!?'&:;\-．，！？＇＆：；－]+"
 _ENGLISH_CANDIDATE = re.compile(rf"{_ENGLISH_WORD}(?:[ \u3000]+{_ENGLISH_WORD})*")
+# 英文候補を単語と空白に分ける
+_ENGLISH_SPLIT = re.compile(r"([ \u3000]+)")
 # 英文中の全角の記号・空白 → 半角
 _ENGLISH_TO_ASCII = str.maketrans("．，！？＇＆：；－\u3000", ".,!?'&:;- ")
-# 英文とみなす最小文字数（これ以上でアルファベットを含めば、2語未満でも英文とする）
-_ENGLISH_MIN_LENGTH = 8
+# 英文とみなす最小の英字数（これ以上なら1語でも英文とする）
+_ENGLISH_MIN_LETTERS = 8
+_LETTER = re.compile(r"[A-Za-z]")
 
 # 英数字のかたまり: 英数字の間に挟まった区切り記号も含めて1単位とする
 # 「、」は「12、000」のように後ろが3桁ちょうどの数字のときだけ桁区切りとみなす
@@ -126,37 +129,98 @@ def _to_zenkaku(text: str) -> str:
     return text.translate(_ASCII_TO_ZENKAKU)
 
 
-class _QuoteState:
-    """段落内の \" と ” の開き・閉じを交互に決めるための状態"""
+# 引用符（変換後の文字を決めるため、段落ごとに先に数える）
+_QUOTE = re.compile(r"[\"\u201c\u201d]")
 
-    def __init__(self):
-        self.is_open = False
+
+def _decide_quotes(text: str) -> list[str]:
+    """段落（_NORMALIZE で正規化済み）の引用符を、出現順に変換後の文字にする
+
+    “ は開き。\" と ” は書き手によって向きがばらつくため、開き・閉じを交互にする
+    開いていないときに数字の直後にある \" は、インチ・秒の記号（″）とみなす
+    開き・閉じの対応が取れない段落は、向きを間違えないよう向きのない ＂ にする
+    """
+    marks = []
+    is_open = False
+    paired = True
+    for m in _QUOTE.finditer(text):
+        s = m.group(0)
+        prev = text[m.start() - 1] if m.start() > 0 else ""
+        if s == "\u201c":
+            paired = paired and not is_open
+            is_open = True
+            marks.append("〝")
+        elif is_open:
+            is_open = False
+            marks.append("〟")
+        elif s == '"' and prev and prev in "0123456789":
+            marks.append("″")
+        else:
+            is_open = True
+            marks.append("〝")
+    if is_open or not paired:
+        marks = [m if m == "″" else "＂" for m in marks]
+    return marks
+
+
+class _QuoteState:
+    """段落内の引用符の変換後の文字を、出現順に渡すための状態"""
+
+    def __init__(self, marks: list[str]):
+        self._marks = iter(marks)
+
+    def next(self) -> str:
+        return next(self._marks, "＂")
 
 
 def _is_english_sentence(text: str) -> bool:
-    """2語以上、または一定長以上でアルファベットを含む"""
-    if not re.search(r"[A-Za-z]", text):
+    """2語以上、または一定数以上の英字を含む（www のような同じ文字の繰り返しは除く）"""
+    letters = _LETTER.findall(text)
+    if not letters:
         return False
-    return " " in text or len(text) >= _ENGLISH_MIN_LENGTH
+    if " " in text:
+        return True
+    return len(letters) >= _ENGLISH_MIN_LETTERS and len({c.lower() for c in letters}) > 1
+
+
+def _english_spans(text: str):
+    """英文とみなす部分の (開始, 終了) を返す
+
+    全角スペースは、両側の単語が英字を含むときだけ英文の単語の区切りとみなす
+    （「#3　Aランク」「！？　S」の全角スペースは和文の空白として残す）
+    """
+    for m in _ENGLISH_CANDIDATE.finditer(text):
+        parts = _ENGLISH_SPLIT.split(m.group(0))
+        start = pos = m.start()
+        for i in range(1, len(parts), 2):
+            pos += len(parts[i - 1])
+            sep = parts[i]
+            if "\u3000" in sep and not (
+                _LETTER.search(parts[i - 1]) and _LETTER.search(parts[i + 1])
+            ):
+                yield start, pos
+                start = pos + len(sep)
+            pos += len(sep)
+        yield start, m.end()
 
 
 def to_vertical_html(text: str, quote: _QuoteState | None = None) -> str:
     """エスケープ解除済みのテキスト（タイトル等）を縦書き向けに変換し、エスケープ済みHTMLを返す
 
     英文は1文字ずつ縦に並べると読みにくいため、半角のまま（縦書きでは横倒し）残す
-    quote: 段落の途中にタグを挟んで続けて変換するときに、引用符の対応を引き継ぐ
+    quote: 段落の途中にタグを挟んで続けて変換するときに、段落全体で決めた引用符を引き継ぐ
     """
+    text = text.translate(_NORMALIZE)
     if quote is None:
-        quote = _QuoteState()
+        quote = _QuoteState(_decide_quotes(text))
     out = []
     pos = 0
-    text = text.translate(_NORMALIZE)
-    for m in _ENGLISH_CANDIDATE.finditer(text):
-        english = m.group(0).translate(_ENGLISH_TO_ASCII)
+    for start, end in _english_spans(text):
+        english = text[start:end].translate(_ENGLISH_TO_ASCII)
         if _is_english_sentence(english):
-            out.append(_convert_part(text[pos : m.start()], quote))
+            out.append(_convert_part(text[pos:start], quote))
             out.append(html.escape(english, quote=False))
-            pos = m.end()
+            pos = end
     out.append(_convert_part(text[pos:], quote))
     return "".join(out)
 
@@ -182,9 +246,7 @@ def _convert_part(text: str, quote: _QuoteState) -> str:
         elif kind == "upright":
             out.append(f'<span class="upright">{s}</span>')
         elif kind == "dquote":
-            # “ は常に開き。” と " は書き手によって向きがばらつくため、段落内で開き・閉じを交互にする
-            quote.is_open = s == "\u201c" or not quote.is_open
-            out.append("〝" if quote.is_open else "〟")
+            out.append(quote.next())
         else:
             out.append(_to_zenkaku(s))
     out.append(html.escape(text[pos:], quote=False))
@@ -195,14 +257,27 @@ def _convert_outside_tags(text: str) -> str:
     """HTMLタグの外側のテキスト部分を縦書き向けに変換
 
     &amp; などのエンティティは一度文字に戻してから変換する（記号は全角になる）
-    ルビなどのタグをまたいでも、段落内の引用符の対応は引き継ぐ
+    ルビなどのタグをまたいでも、引用符は段落全体で対応を決める
     """
+    # 段落ごとにテキスト部分をまとめ、引用符の変換後の文字を先に決める
+    # （エスケープを戻した文字が < で始まることがあるため、タグかどうかは分割位置で判定する）
+    parts = _TAG_SPLIT.split(text)  # 偶数番目がテキスト、奇数番目がタグ
+    paragraph_quotes = []
+    texts = []
+    for i, part in enumerate(parts + ["<p>"]):  # 末尾に段落の区切りを補う
+        if i % 2 and _PARAGRAPH_BOUNDARY.match(part):
+            paragraph_quotes.append(_decide_quotes("".join(texts).translate(_NORMALIZE)))
+            texts = []
+        elif not i % 2:
+            texts.append(html.unescape(part))
+
     out = []
-    quote = _QuoteState()
-    for part in _TAG_SPLIT.split(text):
-        if part.startswith("<"):
+    paragraphs = iter(paragraph_quotes)
+    quote = _QuoteState(next(paragraphs))
+    for i, part in enumerate(parts):
+        if i % 2:
             if _PARAGRAPH_BOUNDARY.match(part):
-                quote = _QuoteState()
+                quote = _QuoteState(next(paragraphs))
             out.append(part)
         elif part:
             out.append(to_vertical_html(html.unescape(part), quote))
